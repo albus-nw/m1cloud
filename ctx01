@@ -1,0 +1,121 @@
+heat_template_version: 2016-10-14
+
+description:
+  # a description of the template
+
+parameter_groups:
+  # a declaration of input parameter groups and order
+
+parameters:
+  # declaration of input parameters
+  image_name_ctx:
+    type: string
+    label: ImageName_CTX
+    description: Image für Server CTX 
+    default: "CGM Windows Server 2019 std current"
+    hidden: false
+    constraints:
+      - custom_constraint: glance.image
+    immutable: false
+
+  # declaration of input parameters
+  NAME_EXTERNES_NETZWERK:
+    type: string
+    label: NAME_EXTERNES_NETZWERK
+    description: Gibt das externe Netzwerk für Public IPs an. 
+    default: Koblenz-Access
+    hidden: false
+    constraints:
+      - custom_constraint: neutron.network
+    immutable: false
+
+# ------------------------------------------------------
+# RESOURCES 
+# ------------------------------------------------------
+
+resources:
+  # declaration of template resources
+  ctx_boot: 
+    type: "OS::Cinder::Volume"
+    properties: 
+      name: CTX01_BOOT
+      size: 150
+      image: { get_param: image_name_ctx }
+  ctx_hdd2: 
+    type: OS::Cinder::Volume
+    properties: 
+      name: ctx_hdd2
+      size: 250
+
+  VolumeAttachment_2: 
+    type: OS::Cinder::VolumeAttachment
+    properties: 
+      instance_uuid: { get_resource: CTX01 }
+      volume_id: { get_resource: ctx_hdd2 }
+      mountpoint: /dev/sdb
+
+  ctxnet: 
+    type: OS::Neutron::Net
+    properties: 
+      admin_state_up: true
+      name: ctxnet
+  
+  Subnet: 
+    type: OS::Neutron::Subnet
+    properties: 
+      dns_nameservers: ["10.0.0.141","10.0.0.142","10.0.0.143","8.8.8.8"]
+      network: { get_resource: ctxnet }
+      name: ctxsubnet
+      ip_version: 4
+      cidr: "172.16.0.0/24"
+      gateway_ip: "172.16.0.1"
+      enable_dhcp: false
+  
+  ctxrouter: 
+    type: OS::Neutron::Router
+    properties: 
+      external_gateway_info: { network: { get_param: NAME_EXTERNES_NETZWERK } }
+      name: ctxrouter
+  
+  RouterInterface_1: 
+    type: OS::Neutron::RouterInterface
+    properties: 
+      router_id: { get_resource: ctxrouter }
+      subnet: { get_resource: Subnet }
+  
+  ctxport: 
+    type: OS::Neutron::Port
+    properties: 
+      network: { get_resource: ctxnet }
+      fixed_ips: 
+        - ip_address: "172.16.0.100"
+      name: ctxport
+  
+  CTX01: 
+    type: "OS::Nova::Server"
+    properties: 
+      block_device_mapping_v2: 
+        - volume_id: { get_resource: ctx_boot }
+          volume_size: 150
+      name: CTX01
+      flavor: "hperf.8.32G.free"
+      networks: 
+        - port: { get_resource: ctxport }
+      name: CTX01
+      key_name: SecKey_Citrix
+      availability_zone: nova
+      user_data_format: RAW
+#      user_data: | 
+#        rem MyBoot-Script 
+#        New-Item C:\hallo.txt -Confirm:$false -Force
+        
+  CTX01_PUBLIC_IP: 
+    type: OS::Neutron::FloatingIP
+    properties: 
+      floating_network: { get_param: NAME_EXTERNES_NETZWERK }
+  
+  FloatingIPAssociation_1: 
+    type: OS::Neutron::FloatingIPAssociation
+    properties: 
+      floatingip_id: { get_resource: CTX01_PUBLIC_IP }
+      port_id: { get_resource: ctxport }
